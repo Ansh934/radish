@@ -2,56 +2,112 @@ pub(crate) enum RespValue {
     SimpleString(String),  // +OK\r\n
     Integer(i64),          // :1000\r\n
     BulkString(String),    // $6\r\nfoobar\r\n
-    Array(Vec<RespValue>), // *2\r\n$3\r\nfoo\r\n$3\r\nbar\r\n
-    Error(String),         // -Error message\r\n
+    Array(Vec<RespValue>), // *2\r\n...
+    Error(String),         // -ERR msg\r\n
     Null,                  // $-1\r\n
 }
 
-pub(crate) struct Resp {}
+pub(crate) struct Resp;
 
 impl Resp {
-    fn read_line(buf: &[u8]) -> &[u8] {
-        // read until \r\n
-        buf.split(|&b| b == b'\r' || b == b'\n')
-            .next()
-            .unwrap_or(&[])
+    /// Reads a line terminated by \r\n
+    /// Returns (line_without_crlf, remaining_buf)
+    fn read_line(buf: &[u8]) -> Option<(&[u8], &[u8])> {
+        if buf.len() < 2 {
+            return None;
+        }
+        let pos = buf.windows(2).position(|w| w == b"\r\n")?;
+        Some((&buf[..pos], &buf[pos + 2..]))
     }
+
     pub(crate) fn decode(buf: &[u8]) -> Option<(RespValue, &[u8])> {
-        match buf.first() {
-            Some(&b) => match b {
-                b'*' => {
-                    let mut values = Vec::new();
-                    let line = Self::read_line(&buf[1..]);
-                    let len = 1 + line.len() + 2;
-                    let mut remaining = if buf.len() >= len { &buf[len..] } else { &[] };
-                    for _ in 0..String::from_utf8_lossy(line).parse().unwrap_or(0) {
-                        if let Some((value, rest)) = Self::decode(remaining) {
-                            values.push(value);
-                            remaining = rest;
-                        } else {
-                            break;
-                        }
-                    }
-                    Some((RespValue::Array(values), remaining))
+        let first = *buf.first()?;
+        match first {
+            // Array
+            b'*' => {
+                let (line, mut remaining) = Self::read_line(&buf[1..])?;
+
+                let count: usize = String::from_utf8_lossy(line).parse().ok()?;
+
+                let mut values = Vec::with_capacity(count);
+
+                for _ in 0..count {
+                    let (value, rest) = Self::decode(remaining)?;
+                    values.push(value);
+                    remaining = rest;
                 }
-                b'+' | b':' | b'$' | b'-' => {
-                    let line = Self::read_line(&buf[1..]);
-                    let val = match b {
-                        b'+' => RespValue::SimpleString(String::from_utf8_lossy(line).to_string()),
-                        b':' => {
-                            RespValue::Integer(String::from_utf8_lossy(line).parse().unwrap_or(0))
-                        }
-                        b'$' => RespValue::BulkString(String::from_utf8_lossy(line).to_string()),
-                        b'-' => RespValue::Error(String::from_utf8_lossy(line).to_string()),
-                        _ => unreachable!(),
-                    };
-                    let len = 1 + line.len() + 2;
-                    let remaining = if buf.len() >= len { &buf[len..] } else { &[] };
-                    Some((val, remaining))
+
+                Some((RespValue::Array(values), remaining))
+            }
+
+            // Simple String
+            b'+' => {
+                let (line, remaining) = Self::read_line(&buf[1..])?;
+
+                Some((
+                    RespValue::SimpleString(String::from_utf8_lossy(line).to_string()),
+                    remaining,
+                ))
+            }
+
+            // Integer
+            b':' => {
+                let (line, remaining) = Self::read_line(&buf[1..])?;
+
+                let value = String::from_utf8_lossy(line).parse().ok()?;
+
+                Some((RespValue::Integer(value), remaining))
+            }
+
+            // Error
+            b'-' => {
+                let (line, remaining) = Self::read_line(&buf[1..])?;
+
+                Some((
+                    RespValue::Error(String::from_utf8_lossy(line).to_string()),
+                    remaining,
+                ))
+            }
+
+            // Bulk String
+            b'$' => {
+                let (line, remaining_after_len) = Self::read_line(&buf[1..])?;
+
+                let len: isize = String::from_utf8_lossy(line).parse().ok()?;
+
+                // Null bulk string
+                if len == -1 {
+                    return Some((RespValue::Null, remaining_after_len));
                 }
-                _ => Some((RespValue::Null, &buf[1..])),
-            },
-            None => None,
+
+                if len < 0 {
+                    return None;
+                }
+
+                let len = len as usize;
+
+                // Need:
+                // data bytes + trailing \r\n
+                if remaining_after_len.len() < len + 2 {
+                    return None;
+                }
+
+                let data = &remaining_after_len[..len];
+
+                // Validate trailing \r\n
+                if &remaining_after_len[len..len + 2] != b"\r\n" {
+                    return None;
+                }
+
+                let remaining = &remaining_after_len[len + 2..];
+
+                Some((
+                    RespValue::BulkString(String::from_utf8_lossy(data).to_string()),
+                    remaining,
+                ))
+            }
+
+            _ => None,
         }
     }
 
@@ -61,11 +117,13 @@ impl Resp {
             RespValue::Integer(i) => format!(":{}\r\n", i).into_bytes(),
             RespValue::BulkString(s) => format!("${}\r\n{}\r\n", s.len(), s).into_bytes(),
             RespValue::Array(arr) => {
-                let mut res = format!("*{}\r\n", arr.len()).into_bytes();
-                for v in arr {
-                    res.extend(Self::encode(v));
+                let mut out = format!("*{}\r\n", arr.len()).into_bytes();
+
+                for value in arr {
+                    out.extend(Self::encode(value));
                 }
-                res
+
+                out
             }
             RespValue::Error(e) => format!("-{}\r\n", e).into_bytes(),
             RespValue::Null => b"$-1\r\n".to_vec(),
