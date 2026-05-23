@@ -129,4 +129,14 @@ impl Resp {
             RespValue::Null => b"$-1\r\n".to_vec(),
         }
     }
+
+    pub(crate) fn encode_simple_string(s: &str) -> Vec<u8> {
+        Self::encode(&RespValue::SimpleString(s.to_string()))
+    }
+    pub(crate) fn encode_string(s: &str) -> Vec<u8> {
+        Self::encode(&RespValue::BulkString(s.to_string()))
+    }
+    pub(crate) fn encode_error(e: &str) -> Vec<u8> {
+        Self::encode(&RespValue::Error(e.to_string()))
+    }
 }
