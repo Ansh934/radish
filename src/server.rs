@@ -1,53 +1,77 @@
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
+use tokio::task;
 
 use crate::cmd::RadishCommand;
+use crate::response::Response;
+use crate::store::Store;
 
 pub(crate) struct Server {}
 
 impl Server {
-    pub(crate) async fn start() -> Result<(), Box<dyn std::error::Error>> {
+    pub(crate) async fn run() -> Result<(), Box<dyn std::error::Error>> {
         let listener = TcpListener::bind("127.0.0.1:7379").await?;
-        loop {
-            let (mut stream, addr) = listener.accept().await?;
-            println!("accepted new connection from {}", addr);
-            tokio::spawn(async move {
-                let mut buf = [0; 512];
+        let store = Store::new();
+        let local = task::LocalSet::new();
 
+        local
+            .run_until(async move {
                 loop {
-                    match stream.read(&mut buf).await {
-                        Ok(0) => {
-                            println!("client disconnected");
-                            break;
+                    let (mut stream, addr) = match listener.accept().await {
+                        Ok(res) => res,
+                        Err(e) => {
+                            eprintln!("accept error: {}", e);
+                            continue;
                         }
+                    };
+                    println!("accepted new connection from {}", addr);
 
-                        Ok(read_count) => {
-                            let cmd = RadishCommand::from_bytes(&buf[..read_count]);
-                            match cmd {
-                                Some(cmd) => {
-                                    let response = cmd.eval();
-                                    if let Err(err) = stream.write_all(&response).await {
-                                        eprintln!("write error: {}", err);
-                                        break;
+                    // 3. Clone the SharedStore pointer to pass into the local task
+                    let store_clone = Store::clone_shared(&store);
+
+                    // 4. Use spawn_local instead of spawn to stay on the same thread
+                    task::spawn_local(async move {
+                        let mut buf = [0; 512];
+
+                        loop {
+                            match stream.read(&mut buf).await {
+                                Ok(0) => {
+                                    println!("client disconnected");
+                                    break;
+                                }
+
+                                Ok(read_count) => {
+                                    let cmd = RadishCommand::from_bytes(&buf[..read_count]);
+                                    match cmd {
+                                        Some(cmd) => {
+                                            let response = Response::eval(&cmd, &store_clone);
+                                            if let Err(err) = stream.write_all(&response.data).await
+                                            {
+                                                eprintln!("write error: {}", err);
+                                                break;
+                                            }
+                                        }
+                                        None => {
+                                            let error_response = b"-ERR invalid command\r\n";
+                                            if let Err(err) = stream.write_all(error_response).await
+                                            {
+                                                eprintln!("write error: {}", err);
+                                                break;
+                                            }
+                                        }
                                     }
                                 }
-                                None => {
-                                    let error_response = b"-ERR invalid command\r\n";
-                                    if let Err(err) = stream.write_all(error_response).await {
-                                        eprintln!("write error: {}", err);
-                                        break;
-                                    }
+
+                                Err(err) => {
+                                    eprintln!("read error: {}", err);
+                                    break;
                                 }
                             }
                         }
-
-                        Err(err) => {
-                            eprintln!("read error: {}", err);
-                            break;
-                        }
-                    }
+                    });
                 }
-            });
-        }
+            })
+            .await;
+        Ok(())
     }
 }
