@@ -1,15 +1,34 @@
 use crate::resp::{Resp, RespValue};
 
+#[derive(Debug, PartialEq)]
+pub(crate) enum CommandType {
+    Ping,
+    Echo,
+    Set,
+    Get,
+    Ttl,
+    Unknown(String),
+}
+
+impl From<&str> for CommandType {
+    fn from(s: &str) -> Self {
+        match s.to_uppercase().as_str() {
+            "PING" => CommandType::Ping,
+            "ECHO" => CommandType::Echo,
+            "SET" => CommandType::Set,
+            "GET" => CommandType::Get,
+            "TTL" => CommandType::Ttl,
+            _ => CommandType::Unknown(s.to_string()),
+        }
+    }
+}
+
 pub(crate) struct RadishCommand {
-    cmd: String,
+    cmd: CommandType,
     args: Vec<String>,
 }
 
 impl RadishCommand {
-    pub(crate) fn new(cmd: String, args: Vec<String>) -> Self {
-        RadishCommand { cmd, args }
-    }
-
     pub(crate) fn from_bytes(buf: &[u8]) -> Option<Self> {
         let (resp_value, _) = Resp::decode(&buf)?;
         Self::from_resp_value(&resp_value)
@@ -18,11 +37,12 @@ impl RadishCommand {
     fn from_resp_value(value: &RespValue) -> Option<Self> {
         match value {
             RespValue::Array(items) if !items.is_empty() => {
-                let cmd = match &items[0] {
+                let cmd_str = match &items[0] {
                     RespValue::BulkString(s) => s.clone(),
                     RespValue::SimpleString(s) => s.clone(),
                     _ => return None,
-                }.to_uppercase();
+                };
+                let cmd = CommandType::from(cmd_str.as_str());
 
                 let args = items[1..]
                     .iter()
@@ -39,28 +59,11 @@ impl RadishCommand {
         }
     }
 
-    pub(crate) fn eval(&self) -> Vec<u8> {
-        match self.cmd.to_uppercase().as_str() {
-            "PING" => Resp::encode_simple_string("PONG"),
-            "ECHO" => {
-                if let Some(arg) = self.args.get(0) {
-                    Resp::encode_string(arg)
-                } else {
-                    Resp::encode_error("ECHO command requires an argument")
-                }
-            }
-            "SET" => {
-                if let (Some(key), Some(value)) = (self.args.get(0), self.args.get(1)) {
-                    // Here you would normally set the key-value pair in your storage
-                    // For this example, we'll just return a simple OK response
-                    Resp::encode_simple_string("OK")
-                } else {
-                    Resp::encode_error("SET command requires a key and a value")
-                }
-            },
-            "GET" => {},
-            "TTL" => {},
-            _ => Resp::encode_error(&format!("unknown command: {}", self.cmd)),
-        }
+    pub(crate) fn cmd_type(&self) -> &CommandType {
+        &self.cmd
+    }
+
+    pub(crate) fn args(&self) -> &[String] {
+        &self.args
     }
 }
