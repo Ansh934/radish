@@ -1,6 +1,10 @@
-use crate::resp::{Resp, RespValue};
+use crate::resp::RespValue;
 use chrono::{DateTime, Utc};
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
+
+pub(crate) type SharedStore = Rc<RefCell<Store>>;
 
 pub(crate) struct StoreValue {
     value: RespValue,
@@ -12,10 +16,14 @@ pub(crate) struct Store {
 }
 
 impl Store {
-    pub(crate) fn new() -> Self {
-        Store {
+    pub(crate) fn new() -> SharedStore {
+        Rc::new(RefCell::new(Store {
             data: HashMap::new(),
-        }
+        }))
+    }
+
+    pub(crate) fn clone_shared(store: &SharedStore) -> SharedStore {
+        Rc::clone(store)
     }
 
     pub(crate) fn set(&mut self, key: String, value: RespValue, expiry: Option<DateTime<Utc>>) {
