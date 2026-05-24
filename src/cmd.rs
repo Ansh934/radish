@@ -41,7 +41,7 @@ impl RadishCommand {
 
     pub(crate) fn eval(&self) -> Vec<u8> {
         match self.cmd.to_uppercase().as_str() {
-            "PING" => Resp::encode_string("PONG"),
+            "PING" => Resp::encode_simple_string("PONG"),
             "ECHO" => {
                 if let Some(arg) = self.args.get(0) {
                     Resp::encode_string(arg)
