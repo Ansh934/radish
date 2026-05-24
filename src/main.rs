@@ -1,12 +1,15 @@
-mod resp;
 mod cmd;
+mod resp;
+mod response;
 mod server;
 mod store;
 
 use server::Server;
 
-#[tokio::main]
+#[tokio::main(flavor = "current_thread")]
 async fn main() {
     println!("Logs from your program will appear here!");
-    Server::start().await;
+    if let Err(e) = Server::run().await {
+        eprintln!("Server error: {}", e);
+    }
 }
