@@ -49,6 +49,17 @@ impl RadishCommand {
                     Resp::encode_error("ECHO command requires an argument")
                 }
             }
+            "SET" => {
+                if let (Some(key), Some(value)) = (self.args.get(0), self.args.get(1)) {
+                    // Here you would normally set the key-value pair in your storage
+                    // For this example, we'll just return a simple OK response
+                    Resp::encode_simple_string("OK")
+                } else {
+                    Resp::encode_error("SET command requires a key and a value")
+                }
+            },
+            "GET" => {},
+            "TTL" => {},
             _ => Resp::encode_error(&format!("unknown command: {}", self.cmd)),
         }
     }
