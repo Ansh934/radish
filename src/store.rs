@@ -1,5 +1,5 @@
 use crate::resp::RespValue;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -26,7 +26,11 @@ impl Store {
         Rc::clone(store)
     }
 
-    pub(crate) fn set(&mut self, key: String, value: RespValue, expiry: Option<DateTime<Utc>>) {
+    pub(crate) fn set(&mut self, key: String, value: RespValue, expiry: Option<i64>) {
+        let expiry = match expiry {
+            Some(seconds) => Some(Utc::now() + Duration::seconds(seconds)),
+            None => None,
+        };
         self.data.insert(key, StoreValue { value, expiry });
     }
 

@@ -26,10 +26,8 @@ impl Server {
                     };
                     println!("accepted new connection from {}", addr);
 
-                    // 3. Clone the SharedStore pointer to pass into the local task
                     let store_clone = Store::clone_shared(&store);
 
-                    // 4. Use spawn_local instead of spawn to stay on the same thread
                     task::spawn_local(async move {
                         let mut buf = [0; 512];
 

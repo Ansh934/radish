@@ -19,9 +19,8 @@ impl Response {
             }
             CommandType::Set => {
                 if let (Some(key), Some(value)) = (cmd.args().get(0), cmd.args().get(1)) {
-                    // Borrow the RefCell mutably and set the value without Mutex locking
                     let mut store_ref = store.borrow_mut();
-                    store_ref.set(key.clone(), RespValue::SimpleString(value.clone()), None);
+                    store_ref.set(key.clone(), RespValue::BulkString(value.clone()), None);
                     Resp::encode_simple_string("OK")
                 } else {
                     Resp::encode_error("SET command requires a key and a value")
