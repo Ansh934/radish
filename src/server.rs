@@ -10,7 +10,10 @@ pub(crate) struct Server {}
 
 impl Server {
     pub(crate) async fn run() -> Result<(), Box<dyn std::error::Error>> {
-        let listener = TcpListener::bind("127.0.0.1:7379").await?;
+        let host = "127.0.0.1";
+        let port = 7379;
+        println!("Starting server on {}:{}", host, port);
+        let listener = TcpListener::bind(format!("{}:{}", host, port)).await?;
         let store = Store::new();
         let local = task::LocalSet::new();
 

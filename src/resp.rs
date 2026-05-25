@@ -114,8 +114,10 @@ impl Resp {
     pub(crate) fn encode(value: &RespValue) -> Vec<u8> {
         match value {
             RespValue::SimpleString(s) => format!("+{}\r\n", s).into_bytes(),
-            RespValue::Integer(i) => format!(":{}\r\n", i).into_bytes(),
             RespValue::BulkString(s) => format!("${}\r\n{}\r\n", s.len(), s).into_bytes(),
+            RespValue::Integer(i) => format!(":{}\r\n", i).into_bytes(),
+            RespValue::Error(e) => format!("-{}\r\n", e).into_bytes(),
+            RespValue::Null => b"$-1\r\n".to_vec(),
             RespValue::Array(arr) => {
                 let mut out = format!("*{}\r\n", arr.len()).into_bytes();
 
@@ -125,18 +127,21 @@ impl Resp {
 
                 out
             }
-            RespValue::Error(e) => format!("-{}\r\n", e).into_bytes(),
-            RespValue::Null => b"$-1\r\n".to_vec(),
         }
     }
 
     pub(crate) fn encode_simple_string(s: &str) -> Vec<u8> {
         Self::encode(&RespValue::SimpleString(s.to_string()))
     }
-    pub(crate) fn encode_string(s: &str) -> Vec<u8> {
+    pub(crate) fn encode_bulk_string(s: &str) -> Vec<u8> {
         Self::encode(&RespValue::BulkString(s.to_string()))
     }
     pub(crate) fn encode_error(e: &str) -> Vec<u8> {
         Self::encode(&RespValue::Error(e.to_string()))
     }
+    pub(crate) fn encode_null() -> Vec<u8> {
+        Self::encode(&RespValue::Null)
+    }
 }
+
+// todo implement asref pattern for allowing both &str and String to be used as keys in store
