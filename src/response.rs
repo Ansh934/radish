@@ -9,7 +9,13 @@ pub(crate) struct Response {
 impl Response {
     pub(crate) fn eval(cmd: &RadishCommand, store: &SharedStore) -> Self {
         let data = match cmd.cmd_type() {
-            CommandType::Ping => Resp::encode_simple_string("PONG"),
+            CommandType::Ping => {
+                if cmd.args().is_empty() {
+                    Resp::encode_simple_string("PONG")
+                } else {
+                    Resp::encode_bulk_string(&cmd.args()[0])
+                }
+            }
             CommandType::Echo => {
                 if let Some(arg) = cmd.args().get(0) {
                     Resp::encode_bulk_string(arg)
@@ -36,7 +42,9 @@ impl Response {
                         i += 1;
                         if i >= args.len() {
                             return Response {
-                                data: Resp::encode_error("SET command with EX/PX requires an expiry time"),
+                                data: Resp::encode_error(
+                                    "SET command with EX/PX requires an expiry time",
+                                ),
                             };
                         }
                         match args[i].parse::<i64>() {
