@@ -18,9 +18,13 @@ impl Response {
                 }
             }
             CommandType::Set => {
-                if let (Some(key), Some(value)) = (cmd.args().get(0), cmd.args().get(1)) {
+                if let (Some(key), Some(value), expiry) = (
+                    cmd.args().get(0),
+                    cmd.args().get(1),
+                    cmd.args().get(2).and_then(|s| s.parse::<i64>().ok()),
+                ) {
                     let mut store_ref = store.borrow_mut();
-                    store_ref.set(key.clone(), RespValue::BulkString(value.clone()), None);
+                    store_ref.set(key.clone(), RespValue::BulkString(value.clone()), expiry);
                     Resp::encode_simple_string("OK")
                 } else {
                     Resp::encode_error("SET command requires a key and a value")

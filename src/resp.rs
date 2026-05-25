@@ -1,3 +1,5 @@
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum RespValue {
     SimpleString(String),  // +OK\r\n
     Integer(i64),          // :1000\r\n

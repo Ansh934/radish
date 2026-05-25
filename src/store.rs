@@ -6,6 +6,7 @@ use std::rc::Rc;
 
 pub(crate) type SharedStore = Rc<RefCell<Store>>;
 
+#[derive(Debug)]
 pub(crate) struct StoreValue {
     value: RespValue,
     expiry: Option<DateTime<Utc>>,
@@ -35,7 +36,9 @@ impl Store {
     }
 
     pub(crate) fn get(&self, key: &str) -> Option<&RespValue> {
+        println!("Getting key: {}", key);
         self.data.get(key).and_then(|store_value| {
+            println!("Found value: {:?} with expiry: {:?}", store_value.value, store_value.expiry);
             if let Some(expiry) = store_value.expiry {
                 if Utc::now() > expiry {
                     return None; // expired
