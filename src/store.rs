@@ -23,10 +23,6 @@ impl Store {
         }))
     }
 
-    pub(crate) fn clone_shared(store: &SharedStore) -> SharedStore {
-        Rc::clone(store)
-    }
-
     pub(crate) fn set(&mut self, key: String, value: RespValue, expiry_ms: Option<i64>) {
         let expiry = match expiry_ms {
             Some(ms) => Some(Utc::now() + Duration::milliseconds(ms)),

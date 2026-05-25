@@ -1,6 +1,7 @@
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::task;
+use std::rc::Rc;
 
 use crate::cmd::RadishCommand;
 use crate::response::Response;
@@ -29,7 +30,7 @@ impl Server {
                     };
                     println!("accepted new connection from {}", addr);
 
-                    let store_clone = Store::clone_shared(&store);
+                    let store_clone = Rc::clone(&store);
 
                     task::spawn_local(async move {
                         let mut buf = [0; 512];

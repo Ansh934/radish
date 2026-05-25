@@ -31,24 +31,25 @@ pub(crate) struct RadishCommand {
 impl RadishCommand {
     pub(crate) fn from_bytes(buf: &[u8]) -> Option<Self> {
         let (resp_value, _) = Resp::decode(&buf)?;
-        Self::from_resp_value(&resp_value)
+        Self::from_resp_value(resp_value)
     }
 
-    fn from_resp_value(value: &RespValue) -> Option<Self> {
+    fn from_resp_value(value: RespValue) -> Option<Self> {
         match value {
-            RespValue::Array(items) if !items.is_empty() => {
-                let cmd_str = match &items[0] {
-                    RespValue::BulkString(s) => s.clone(),
-                    RespValue::SimpleString(s) => s.clone(),
+            RespValue::Array(mut items) if !items.is_empty() => {
+                let first_item = items.remove(0);
+                let cmd_str = match first_item {
+                    RespValue::BulkString(s) => s,
+                    RespValue::SimpleString(s) => s,
                     _ => return None,
                 };
                 let cmd = CommandType::from(cmd_str.as_str());
 
-                let args = items[1..]
-                    .iter()
+                let args = items
+                    .into_iter()
                     .filter_map(|item| match item {
-                        RespValue::BulkString(s) => Some(s.clone()),
-                        RespValue::SimpleString(s) => Some(s.clone()),
+                        RespValue::BulkString(s) => Some(s),
+                        RespValue::SimpleString(s) => Some(s),
                         _ => None,
                     })
                     .collect();
