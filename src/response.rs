@@ -41,7 +41,14 @@ impl Response {
                 }
                 None => Resp::encode_error("GET command requires a key"),
             },
-            CommandType::Ttl => Resp::encode_error("TTL not implemented yet"),
+            CommandType::Ttl => match cmd.args().get(0) {
+                Some(key) => {
+                    let store_ref = store.borrow();
+                    let ttl = store_ref.ttl(key);
+                    Resp::encode(&RespValue::Integer(ttl))
+                }
+                None => Resp::encode_error("TTL command requires a key"),
+            },
             CommandType::Unknown(name) => Resp::encode_error(&format!("unknown command: {}", name)),
         };
         Response { data }

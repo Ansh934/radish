@@ -38,7 +38,10 @@ impl Store {
     pub(crate) fn get(&self, key: &str) -> Option<&RespValue> {
         println!("Getting key: {}", key);
         self.data.get(key).and_then(|store_value| {
-            println!("Found value: {:?} with expiry: {:?}", store_value.value, store_value.expiry);
+            println!(
+                "Found value: {:?} with expiry: {:?}",
+                store_value.value, store_value.expiry
+            );
             if let Some(expiry) = store_value.expiry {
                 if Utc::now() > expiry {
                     return None; // expired
@@ -46,5 +49,15 @@ impl Store {
             }
             Some(&store_value.value)
         })
+    }
+    
+    pub(crate) fn ttl(&self, key: &str) -> i64 {
+        match self.data.get(key) {
+            Some(store_value) => match store_value.expiry {
+                Some(expiry) => expiry.signed_duration_since(Utc::now()).num_seconds(),
+                None => -1, // no expiry
+            },
+            None => -2, // key does not exist
+        }
     }
 }
