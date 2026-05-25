@@ -18,17 +18,54 @@ impl Response {
                 }
             }
             CommandType::Set => {
-                if let (Some(key), Some(value), expiry) = (
-                    cmd.args().get(0),
-                    cmd.args().get(1),
-                    cmd.args().get(2).and_then(|s| s.parse::<i64>().ok()),
-                ) {
-                    let mut store_ref = store.borrow_mut();
-                    store_ref.set(key.clone(), RespValue::BulkString(value.clone()), expiry);
-                    Resp::encode_simple_string("OK")
-                } else {
-                    Resp::encode_error("SET command requires a key and a value")
+                let args = cmd.args();
+                if args.len() < 2 {
+                    return Response {
+                        data: Resp::encode_error("SET command requires a key and a value"),
+                    };
                 }
+
+                let key = args[0].clone();
+                let value = args[1].clone();
+                let mut expiry_ms: Option<i64> = None;
+
+                let mut i = 2;
+                while i < args.len() {
+                    let arg = args[i].to_uppercase();
+                    if arg == "EX" || arg == "PX" {
+                        i += 1;
+                        if i >= args.len() {
+                            return Response {
+                                data: Resp::encode_error("SET command with EX/PX requires an expiry time"),
+                            };
+                        }
+                        match args[i].parse::<i64>() {
+                            Ok(val) => {
+                                expiry_ms = if arg == "EX" {
+                                    Some(val.saturating_mul(1000))
+                                } else {
+                                    Some(val)
+                                };
+                            }
+                            Err(_) => {
+                                return Response {
+                                    data: Resp::encode_error("Invalid expiry time for SET command"),
+                                };
+                            }
+                        }
+                    } else {
+                        return Response {
+                            data: Resp::encode_error(
+                                "Unknown option for SET command. Only EX and PX are supported.",
+                            ),
+                        };
+                    }
+                    i += 1;
+                }
+
+                let mut store_ref = store.borrow_mut();
+                store_ref.set(key, RespValue::BulkString(value), expiry_ms);
+                Resp::encode_simple_string("OK")
             }
             CommandType::Get => match cmd.args().get(0) {
                 Some(key) => {
