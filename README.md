@@ -219,4 +219,4 @@ OK
 
 ## 📄 License
 
-This project is open source. See the repository for license details.
+This project is released under the Unlicense and dedicated to the public domain. See the LICENSE file for details.
