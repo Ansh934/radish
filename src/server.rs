@@ -33,17 +33,12 @@ impl Server {
                     let store_clone = Rc::clone(&store);
 
                     task::spawn_local(async move {
-                        let mut buf = [0; 512];
+                        let mut buf: Vec<u8> = Vec::new();
 
                         loop {
-                            match stream.read(&mut buf).await {
-                                Ok(0) => {
-                                    println!("client disconnected");
-                                    break;
-                                }
-
-                                Ok(read_count) => {
-                                    let cmd = RadishCommand::from_bytes(&buf[..read_count]);
+                            match stream.read_to_end(&mut buf).await {
+                                Ok(_) => {
+                                    let cmd = RadishCommand::from_bytes(&buf);
                                     match cmd {
                                         Some(cmd) => {
                                             let response = Response::eval(&cmd, &store_clone);
