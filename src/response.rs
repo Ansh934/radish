@@ -1,3 +1,5 @@
+use bytes::{Buf, Bytes};
+
 use crate::cmd::{CommandType, RadishCommand};
 use crate::resp::{Resp, RespValue};
 use crate::store::SharedStore;
@@ -6,21 +8,24 @@ pub(crate) struct Response {
     pub(crate) data: Vec<u8>,
 }
 
+const EX: Bytes = Bytes::from_static("EX".as_bytes());
+const PX: Bytes = Bytes::from_static("PX".as_bytes());
+
 impl Response {
-    pub(crate) fn eval(cmd: &RadishCommand, store: &SharedStore) -> Self {
+    pub(crate) fn eval(cmd: RadishCommand, store: &SharedStore) -> Self {
         let data = match cmd.cmd_type() {
             CommandType::Ping => {
                 if cmd.args().is_empty() {
                     Resp::encode_simple_string("PONG")
                 } else {
-                    Resp::encode_bulk_string(&cmd.args()[0])
+                    Resp::encode_bulk_string_from_bytes(cmd.args()[0].clone())
                 }
             }
             CommandType::Echo => {
-                if let Some(arg) = cmd.args().get(0) {
-                    Resp::encode_bulk_string(arg)
-                } else {
+                if cmd.args().is_empty() {
                     Resp::encode_error("ECHO command requires an argument")
+                } else {
+                    Resp::encode_bulk_string_from_bytes(cmd.args()[0].clone())
                 }
             }
             CommandType::Set => {
@@ -37,8 +42,8 @@ impl Response {
 
                 let mut i = 2;
                 while i < args.len() {
-                    let arg = args[i].to_uppercase();
-                    if arg == "EX" || arg == "PX" {
+                    let arg = args[i].clone();
+                    if arg == EX || arg == PX {
                         i += 1;
                         if i >= args.len() {
                             return Response {
@@ -47,20 +52,14 @@ impl Response {
                                 ),
                             };
                         }
-                        match args[i].parse::<i64>() {
-                            Ok(val) => {
-                                expiry_ms = if arg == "EX" {
-                                    Some(val.saturating_mul(1000))
-                                } else {
-                                    Some(val)
-                                };
-                            }
-                            Err(_) => {
-                                return Response {
-                                    data: Resp::encode_error("Invalid expiry time for SET command"),
-                                };
-                            }
-                        }
+
+                        // SAFE to call here as Bytes are already checked for validness, therefore can't cause panic.
+                        let val = args[i].clone().get_i64();
+                        expiry_ms = if arg == EX {
+                            Some(val.saturating_mul(1000))
+                        } else {
+                            Some(val)
+                        };
                     } else {
                         return Response {
                             data: Resp::encode_error(
@@ -94,7 +93,7 @@ impl Response {
                 }
                 None => Resp::encode_error("TTL command requires a key"),
             },
-            CommandType::Unknown(name) => Resp::encode_error(&format!("unknown command: {}", name)),
+            CommandType::Unknown(name) => Resp::encode_error(&format!("unknown command: {}", name.)),
         };
         Response { data }
     }
