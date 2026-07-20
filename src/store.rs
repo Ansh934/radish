@@ -1,4 +1,5 @@
 use crate::resp::RespValue;
+use bytes::Bytes;
 use chrono::{DateTime, Duration, Utc};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -13,7 +14,7 @@ pub(crate) struct StoreValue {
 }
 
 pub(crate) struct Store {
-    data: HashMap<String, StoreValue>,
+    data: HashMap<Bytes, StoreValue>,
 }
 
 impl Store {
@@ -23,7 +24,7 @@ impl Store {
         }))
     }
 
-    pub(crate) fn set(&mut self, key: String, value: RespValue, expiry_ms: Option<i64>) {
+    pub(crate) fn set(&mut self, key: Bytes, value: RespValue, expiry_ms: Option<i64>) {
         let expiry = match expiry_ms {
             Some(ms) => Some(Utc::now() + Duration::milliseconds(ms)),
             None => None,
@@ -31,8 +32,7 @@ impl Store {
         self.data.insert(key, StoreValue { value, expiry });
     }
 
-    pub(crate) fn get(&self, key: &str) -> Option<&RespValue> {
-        println!("Getting key: {}", key);
+    pub(crate) fn get(&self, key: &Bytes) -> Option<&RespValue> {
         self.data.get(key).and_then(|store_value| {
             println!(
                 "Found value: {:?} with expiry: {:?}",
@@ -47,7 +47,7 @@ impl Store {
         })
     }
     
-    pub(crate) fn ttl(&self, key: &str) -> i64 {
+    pub(crate) fn ttl(&self, key: &Bytes) -> i64 {
         // Returns:
         // >= 0 the remaining time to live in seconds
         // -1 if the key exists but has no associated expiry time

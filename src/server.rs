@@ -1,7 +1,7 @@
+use std::rc::Rc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::task;
-use std::rc::Rc;
 
 use crate::cmd::RadishCommand;
 use crate::response::Response;
@@ -33,35 +33,28 @@ impl Server {
                     let store_clone = Rc::clone(&store);
 
                     task::spawn_local(async move {
-                        let mut buf: Vec<u8> = Vec::new();
-
                         loop {
-                            match stream.read_to_end(&mut buf).await {
-                                Ok(_) => {
-                                    let cmd = RadishCommand::from_bytes(&buf);
-                                    match cmd {
-                                        Some(cmd) => {
-                                            let response = Response::eval(&cmd, &store_clone);
-                                            if let Err(err) = stream.write_all(&response.data).await
-                                            {
-                                                eprintln!("write error: {}", err);
-                                                break;
-                                            }
-                                        }
-                                        None => {
-                                            let error_response = b"-ERR invalid command\r\n";
-                                            if let Err(err) = stream.write_all(error_response).await
-                                            {
-                                                eprintln!("write error: {}", err);
-                                                break;
-                                            }
-                                        }
+                            let mut buf: Vec<u8> = Vec::new();
+                            if let Err(e) = stream.read_to_end(&mut buf).await {
+                                eprintln!("read error: {}", e);
+                                break;
+                            }
+                            let cmd = RadishCommand::from_bytes(buf.into());
+                            match cmd {
+                                Ok(cmd) => {
+                                    let response = Response::eval(cmd, &store_clone);
+                                    if let Err(err) = stream.write_all(&response.data).await {
+                                        eprintln!("write error: {}", err);
+                                        break;
                                     }
                                 }
-
-                                Err(err) => {
-                                    eprintln!("read error: {}", err);
-                                    break;
+                                Err(command_err) => {
+                                    eprintln!("decode error: {}", command_err);
+                                    let error_response = b"-ERR invalid command\r\n";
+                                    if let Err(err) = stream.write_all(error_response).await {
+                                        eprintln!("write error: {}", err);
+                                        break;
+                                    }
                                 }
                             }
                         }
