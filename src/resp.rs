@@ -1,10 +1,9 @@
-use bytes::{Buf, Bytes};
-use std::str;
+use bytes::{BufMut, Bytes, BytesMut};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum RespValue {
     SimpleString(Bytes),   // +OK\r\n
-    Integer(i64),        // :1000\r\n
+    Integer(i64),          // :1000\r\n
     BulkString(Bytes),     // $6\r\nfoobar\r\n
     Array(Vec<RespValue>), // *2\r\n...
     Error(Bytes),          // -ERR msg\r\n
@@ -14,22 +13,8 @@ pub(crate) enum RespValue {
 pub(crate) struct Resp;
 
 impl Resp {
-    fn check_utf8(bytes: &Bytes) -> Result<(), &'static str> {
-        str::from_utf8(bytes).map_err(|_| "Invalid UTF-8 string provided")?;
-        Ok(())
-    }
-
-    fn check_integer(bytes: &Bytes) -> Result<(), &'static str> {
-        str::from_utf8(bytes)
-            .map_err(|_| "Invalid UTF-8 string provided")?
-            .parse::<i64>()
-            .map_err(|_| "Invalid integer provided")?;
-        Ok(())
-    }
-
     /// Reads a line terminated by \r\n
     /// Returns (line_without_crlf, remaining_buf)
-    /// Errors if the buffer is too short or if the line is not found
     fn read_line(buf: Bytes) -> Result<(Bytes, Bytes), &'static str> {
         if buf.len() < 2 {
             return Err("Invalid buffer length");
@@ -37,22 +22,28 @@ impl Resp {
         let pos = buf
             .windows(2)
             .position(|w| w == b"\r\n")
-            .ok_or_else(|| "Line end not found")?;
+            .ok_or("Line end not found")?;
+
         Ok((buf.slice(..pos), buf.slice(pos + 2..)))
     }
 
+    /// Helper to safely parse ASCII numbers (like array lengths or integers) from Bytes
+    pub(crate) fn parse_number<T: std::str::FromStr>(bytes: &Bytes) -> Result<T, &'static str> {
+        std::str::from_utf8(bytes)
+            .map_err(|_| "Protocol error: expected ASCII number")?
+            .parse::<T>()
+            .map_err(|_| "Protocol error: invalid number format")
+    }
+
     pub(crate) fn decode(buf: Bytes) -> Result<(RespValue, Bytes), &'static str> {
-        let first = buf.first().ok_or_else(|| "decode called on empty buffer")?;
+        let first = buf.first().ok_or("decode called on empty buffer")?;
         let buf = buf.slice(1..);
+
         match first {
             // Array
             b'*' => {
                 let (line, mut remaining) = Self::read_line(buf)?;
-
-                let count: usize = std::str::from_utf8(&line)
-                    .expect("Invalid utf8 string provided")
-                    .parse()
-                    .map_err(|_| "Invalid array count provided")?;
+                let count = Self::parse_number::<usize>(&line)?;
 
                 let mut values = Vec::with_capacity(count);
 
@@ -68,38 +59,26 @@ impl Resp {
             // Simple String
             b'+' => {
                 let (line, remaining) = Self::read_line(buf)?;
-                // Check if the line is valid UTF-8
-                str::from_utf8(&line).expect("Invalid utf8 string provided");
                 Ok((RespValue::SimpleString(line), remaining))
             }
 
             // Integer
             b':' => {
                 let (line, remaining) = Self::read_line(buf)?;
-                // Check if the line is valid UTF-8
-                str::from_utf8(&line)
-                    .expect("Invalid utf8 string provided")
-                    .parse::<i64>()
-                    .expect("Invalid integer provided");
-                Ok((RespValue::Integer(line), remaining))
+                let int_val = Self::parse_number::<i64>(&line)?;
+                Ok((RespValue::Integer(int_val), remaining))
             }
 
             // Error
             b'-' => {
                 let (line, remaining) = Self::read_line(buf)?;
-                // Check if the line is valid UTF-8
-                str::from_utf8(&line).expect("Invalid utf8 string provided");
                 Ok((RespValue::Error(line), remaining))
             }
 
             // Bulk String
             b'$' => {
                 let (line, remaining_after_len) = Self::read_line(buf)?;
-
-                let len: isize = std::str::from_utf8(&line)
-                    .expect("Invalid utf8 string provided")
-                    .parse()
-                    .map_err(|_| "Invalid bulk string length")?;
+                let len = Self::parse_number::<isize>(&line)?;
 
                 // Null bulk string
                 if len == -1 {
@@ -112,8 +91,6 @@ impl Resp {
 
                 let len = len as usize;
 
-                // Need:
-                // data bytes + trailing \r\n
                 if remaining_after_len.len() < len + 2 {
                     return Err("Insufficient buffer length for bulk string");
                 }
@@ -134,47 +111,78 @@ impl Resp {
         }
     }
 
-    pub(crate) fn encode(value: &RespValue) -> Vec<u8> {
+    pub(crate) fn encode(value: &RespValue) -> Bytes {
+        let mut buf = BytesMut::with_capacity(4096);
+        Self::encode_into(value, &mut buf);
+        buf.freeze()
+    }
+
+    fn encode_into(value: &RespValue, buf: &mut BytesMut) {
         match value {
             RespValue::SimpleString(s) => {
-                format!("+{}\r\n", unsafe { String::from_utf8_unchecked(s.into()) }).into_bytes()
+                buf.put_u8(b'+');
+                buf.put_slice(s);
+                buf.put_slice(b"\r\n");
             }
-            RespValue::BulkString(s) => format!("${}\r\n{}\r\n", s.len(), unsafe {
-                String::from_utf8_unchecked(s.into())
-            })
-            .into_bytes(),
-            RespValue::Integer(mut i) => format!(":{}\r\n", i.get_i64()).into_bytes(),
+            RespValue::BulkString(s) => {
+                buf.put_u8(b'$');
+                buf.put_slice(s.len().to_string().as_bytes());
+                buf.put_slice(b"\r\n");
+                buf.put_slice(s);
+                buf.put_slice(b"\r\n");
+            }
+            RespValue::Integer(i) => {
+                buf.put_u8(b':');
+                buf.put_slice(i.to_string().as_bytes());
+                buf.put_slice(b"\r\n");
+            }
             RespValue::Error(e) => {
-                format!("-{}\r\n", unsafe { String::from_utf8_unchecked(e.into()) }).into_bytes()
+                buf.put_u8(b'-');
+                buf.put_slice(e);
+                buf.put_slice(b"\r\n");
             }
-            RespValue::Null => b"$-1\r\n".to_vec(),
+            RespValue::Null => {
+                buf.put_slice(b"$-1\r\n");
+            }
             RespValue::Array(arr) => {
-                let mut out = format!("*{}\r\n", arr.len()).into_bytes();
+                buf.put_u8(b'*');
+                buf.put_slice(arr.len().to_string().as_bytes());
+                buf.put_slice(b"\r\n");
 
-                for value in arr {
-                    out.extend(Self::encode(value));
+                for item in arr {
+                    Self::encode_into(item, buf);
                 }
-
-                out
             }
         }
     }
 
-    pub(crate) fn encode_simple_string(s: &str) -> Vec<u8> {
-        Self::encode(RespValue::SimpleString(Bytes::from(s.to_string())))
+    pub(crate) fn encode_simple_string(s: &str) -> Bytes {
+        let mut buf = BytesMut::with_capacity(s.len() + 3);
+        buf.put_u8(b'+');
+        buf.put_slice(s.as_bytes());
+        buf.put_slice(b"\r\n");
+        buf.freeze()
     }
-    pub(crate) fn encode_bulk_string(s: &str) -> Vec<u8> {
-        Self::encode(RespValue::BulkString(Bytes::from(s.to_string())))
+
+    pub(crate) fn encode_bulk_string_from_bytes(s: Bytes) -> Bytes {
+        let mut buf = BytesMut::with_capacity(s.len() + 32);
+        buf.put_u8(b'$');
+        buf.put_slice(s.len().to_string().as_bytes());
+        buf.put_slice(b"\r\n");
+        buf.put_slice(&s);
+        buf.put_slice(b"\r\n");
+        buf.freeze()
     }
-    pub(crate) fn encode_bulk_string_from_bytes(s: Bytes) -> Vec<u8> {
-        Self::encode(RespValue::BulkString(s.clone()))
+
+    pub(crate) fn encode_error(e: &str) -> Bytes {
+        let mut buf = BytesMut::with_capacity(e.len() + 3);
+        buf.put_u8(b'-');
+        buf.put_slice(e.as_bytes());
+        buf.put_slice(b"\r\n");
+        buf.freeze()
     }
-    pub(crate) fn encode_error(e: &str) -> Vec<u8> {
-        Self::encode(RespValue::Error(Bytes::from(e.to_string())))
-    }
-    pub(crate) fn encode_null() -> Vec<u8> {
-        Self::encode(RespValue::Null)
+
+    pub(crate) fn encode_null() -> Bytes {
+        Bytes::from_static(b"$-1\r\n")
     }
 }
-
-// todo implement asref pattern for allowing both &str and String to be used as keys in store

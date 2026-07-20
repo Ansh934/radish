@@ -1,15 +1,11 @@
-use bytes::{Buf, Bytes};
-
 use crate::cmd::{CommandType, RadishCommand};
 use crate::resp::{Resp, RespValue};
 use crate::store::SharedStore;
+use bytes::Bytes;
 
 pub(crate) struct Response {
-    pub(crate) data: Vec<u8>,
+    pub(crate) data: Bytes,
 }
-
-const EX: Bytes = Bytes::from_static("EX".as_bytes());
-const PX: Bytes = Bytes::from_static("PX".as_bytes());
 
 impl Response {
     pub(crate) fn eval(cmd: RadishCommand, store: &SharedStore) -> Self {
@@ -42,29 +38,35 @@ impl Response {
 
                 let mut i = 2;
                 while i < args.len() {
-                    let arg = args[i].clone();
-                    if arg == EX || arg == PX {
+                    let arg_slice = args[i].as_ref(); 
+                    
+                    if arg_slice.eq_ignore_ascii_case(b"EX") || arg_slice.eq_ignore_ascii_case(b"PX") {
+                        let is_ex = arg_slice.eq_ignore_ascii_case(b"EX");
                         i += 1;
+                        
                         if i >= args.len() {
                             return Response {
-                                data: Resp::encode_error(
-                                    "SET command with EX/PX requires an expiry time",
-                                ),
+                                data: Resp::encode_error("SET command with EX/PX requires an expiry time"),
                             };
                         }
 
-                        // SAFE to call here as Bytes are already checked for validness, therefore can't cause panic.
-                        let val = args[i].clone().get_i64();
-                        expiry_ms = if arg == EX {
+                        let val = match Resp::parse_number::<i64>(&args[i]) {
+                            Ok(v) => v,
+                            Err(_) => {
+                                return Response {
+                                    data: Resp::encode_error("ERR value is not an integer or out of range"),
+                                };
+                            }
+                        };
+
+                        expiry_ms = if is_ex {
                             Some(val.saturating_mul(1000))
                         } else {
                             Some(val)
                         };
                     } else {
                         return Response {
-                            data: Resp::encode_error(
-                                "Unknown option for SET command. Only EX and PX are supported.",
-                            ),
+                            data: Resp::encode_error("Unknown option for SET command. Only EX and PX are supported."),
                         };
                     }
                     i += 1;
@@ -93,8 +95,11 @@ impl Response {
                 }
                 None => Resp::encode_error("TTL command requires a key"),
             },
-            CommandType::Unknown(name) => Resp::encode_error(&format!("unknown command: {}", name.)),
+            CommandType::Unknown(name) => {
+                Resp::encode_error(&format!("unknown command: {}", String::from_utf8_lossy(name)))
+            }
         };
+        
         Response { data }
     }
 }
