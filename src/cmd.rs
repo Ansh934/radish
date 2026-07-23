@@ -1,27 +1,17 @@
-use bytes::Bytes;
-
 use crate::resp::{Resp, RespValue};
 
 #[derive(Debug, PartialEq)]
-pub(crate) enum CommandType {
+pub(crate) enum CommandType<'a> {
     Ping,
     Echo,
     Set,
     Get,
     Ttl,
-    Unknown(Bytes),
+    Unknown(&'a [u8]),
 }
 
-// const PING: Bytes = Bytes::from_static("PING".as_bytes());
-// const ECHO: Bytes = Bytes::from_static("ECHO".as_bytes());
-// const SET: Bytes = Bytes::from_static("SET".as_bytes());
-// const GET: Bytes = Bytes::from_static("GET".as_bytes());
-// const TTL: Bytes = Bytes::from_static("TTL".as_bytes());
-
-impl From<Bytes> for CommandType {
-    fn from(b: Bytes) -> Self {
-        let cmd = b.as_ref();
-
+impl<'a> From<&'a [u8]> for CommandType<'a> {
+    fn from(cmd: &'a [u8]) -> Self {
         if cmd.eq_ignore_ascii_case(b"PING") {
             CommandType::Ping
         } else if cmd.eq_ignore_ascii_case(b"ECHO") {
@@ -30,24 +20,53 @@ impl From<Bytes> for CommandType {
             CommandType::Set
         } else if cmd.eq_ignore_ascii_case(b"GET") {
             CommandType::Get
+        } else if cmd.eq_ignore_ascii_case(b"TTL") {
+            CommandType::Ttl
         } else {
-            CommandType::Unknown(b.clone())
+            CommandType::Unknown(cmd)
         }
     }
 }
 
-pub(crate) struct RadishCommand {
-    cmd: CommandType,
-    args: Vec<Bytes>,
+pub(crate) struct RadishCommand<'a> {
+    cmd: CommandType<'a>,
+    args: Vec<&'a [u8]>,
 }
 
-impl RadishCommand {
-    pub(crate) fn from_bytes(buf: Bytes) -> Result<Self, &'static str> {
-        let (resp_value, _) = Resp::decode(buf)?;
-        Self::from_resp_value(resp_value)
+impl<'a> RadishCommand<'a> {
+    /// Attempts to parse a command from a continuous buffer slice.
+    /// Returns Ok(Some) if a complete command was parsed,
+    /// Ok(None) if more data is needed,
+    /// Err if the protocol is invalid.
+    pub(crate) fn try_parse(buf: &'a [u8]) -> Result<Option<(Self, usize)>, &'static str> {
+        if buf.is_empty() {
+            return Ok(None);
+        }
+
+        match Resp::decode(buf) {
+            Ok((resp_value, remaining)) => {
+                // Success! Calculate how many bytes were part of this command
+                let consumed = buf.len() - remaining.len();
+
+                let cmd = Self::from_resp_value(resp_value)?;
+                Ok(Some((cmd, consumed)))
+            }
+            Err(e) => {
+                // Check if the error is just "we don't have enough bytes yet"
+                if e == "Line end not found"
+                    || e == "Invalid buffer length"
+                    || e == "decode called on empty buffer"
+                    || e == "Insufficient buffer length for bulk string"
+                {
+                    Ok(None) // Need to wait for more data from TCP stream
+                } else {
+                    Err(e) // Real protocol error
+                }
+            }
+        }
     }
 
-    fn from_resp_value(value: RespValue) -> Result<Self, &'static str> {
+    pub(crate) fn from_resp_value(value: RespValue<'a>) -> Result<Self, &'static str> {
         match value {
             RespValue::Array(mut items) if !items.is_empty() => {
                 let first_item = items.remove(0);
@@ -75,11 +94,11 @@ impl RadishCommand {
         }
     }
 
-    pub(crate) fn cmd_type(&self) -> &CommandType {
+    pub(crate) fn cmd_type(&self) -> &CommandType<'a> {
         &self.cmd
     }
 
-    pub(crate) fn args(&self) -> &[Bytes] {
+    pub(crate) fn args(&self) -> &[&'a [u8]] {
         &self.args
     }
 }

@@ -15,7 +15,7 @@ impl Server {
         let port = 7379;
         println!("Starting server on {}:{}", host, port);
         let listener = TcpListener::bind(format!("{}:{}", host, port)).await?;
-        let store = Store::new();
+        let store = Rc::new(Store::new());
         let local = task::LocalSet::new();
 
         local
@@ -28,34 +28,76 @@ impl Server {
                             continue;
                         }
                     };
+                    
+                    // Disable Nagle's algorithm to fix the artificial 1ms latency delay
+                    let _ = stream.set_nodelay(true);
+                    
                     println!("accepted new connection from {}", addr);
 
                     let store_clone = Rc::clone(&store);
 
                     task::spawn_local(async move {
+                        // Use a single pre-allocated buffer for reading to avoid extend_from_slice and drain overhead
+                        let mut buffer = vec![0u8; 8192];
+                        let mut head = 0;
+                        let mut tail = 0;
+                        
+                        // A temporary write buffer, reused across requests
+                        let mut write_buf = Vec::with_capacity(8192);
+
                         loop {
-                            let mut buf: Vec<u8> = Vec::new();
-                            if let Err(e) = stream.read_to_end(&mut buf).await {
-                                eprintln!("read error: {}", e);
-                                break;
+                            // If we need more space, shift existing data to the front
+                            if tail == buffer.len() {
+                                if head > 0 {
+                                    buffer.copy_within(head..tail, 0);
+                                    tail -= head;
+                                    head = 0;
+                                } else {
+                                    // Buffer is full of unparsed data (huge command), so we must grow it
+                                    buffer.resize(buffer.len() * 2, 0);
+                                }
                             }
-                            let cmd = RadishCommand::from_bytes(buf.into());
-                            match cmd {
-                                Ok(cmd) => {
-                                    let response = Response::eval(cmd, &store_clone);
-                                    if let Err(err) = stream.write_all(&response.data).await {
-                                        eprintln!("write error: {}", err);
-                                        break;
+
+                            // 1. Read raw bytes directly into the available space
+                            let n = match stream.read(&mut buffer[tail..]).await {
+                                Ok(n) if n == 0 => break,
+                                Ok(n) => n,
+                                Err(_) => break,
+                            };
+                            tail += n;
+
+                            // 2. Parse continuously until we run out of complete commands
+                            while head < tail {
+                                match RadishCommand::try_parse(&buffer[head..tail]) {
+                                    Ok(Some((cmd, bytes_consumed))) => {
+                                        head += bytes_consumed;
+                                        Response::eval(cmd, &store_clone, &mut write_buf);
+                                    }
+                                    Ok(None) => {
+                                        // Incomplete command, wait for next network read
+                                        break; 
+                                    }
+                                    Err(e) => {
+                                        let err_msg = format!("-ERR {}\r\n", e);
+                                        write_buf.extend_from_slice(err_msg.as_bytes());
+                                        break; // Will drop connection below
                                     }
                                 }
-                                Err(command_err) => {
-                                    eprintln!("decode error: {}", command_err);
-                                    let error_response = b"-ERR invalid command\r\n";
-                                    if let Err(err) = stream.write_all(error_response).await {
-                                        eprintln!("write error: {}", err);
-                                        break;
-                                    }
+                            }
+
+                            // 3. Batch write all responses at once
+                            if !write_buf.is_empty() {
+                                if stream.write_all(&write_buf).await.is_err() {
+                                    return;
                                 }
+                                write_buf.clear();
+                            }
+
+                            // 4. If we consumed everything, instantly reset pointers to 0 
+                            // to maximize read space without any memory shifting.
+                            if head == tail {
+                                head = 0;
+                                tail = 0;
                             }
                         }
                     });
