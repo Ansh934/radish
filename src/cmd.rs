@@ -1,4 +1,5 @@
 use crate::resp::{Resp, RespValue};
+use crate::error::RadishError;
 
 #[derive(Debug, PartialEq)]
 pub(crate) enum CommandType<'a> {
@@ -38,7 +39,7 @@ impl<'a> RadishCommand<'a> {
     /// Returns Ok(Some) if a complete command was parsed,
     /// Ok(None) if more data is needed,
     /// Err if the protocol is invalid.
-    pub(crate) fn try_parse(buf: &'a [u8]) -> Result<Option<(Self, usize)>, &'static str> {
+    pub(crate) fn try_parse(buf: &'a [u8]) -> Result<Option<(Self, usize)>, RadishError> {
         if buf.is_empty() {
             return Ok(None);
         }
@@ -51,22 +52,12 @@ impl<'a> RadishCommand<'a> {
                 let cmd = Self::from_resp_value(resp_value)?;
                 Ok(Some((cmd, consumed)))
             }
-            Err(e) => {
-                // Check if the error is just "we don't have enough bytes yet"
-                if e == "Line end not found"
-                    || e == "Invalid buffer length"
-                    || e == "decode called on empty buffer"
-                    || e == "Insufficient buffer length for bulk string"
-                {
-                    Ok(None) // Need to wait for more data from TCP stream
-                } else {
-                    Err(e) // Real protocol error
-                }
-            }
+            Err(RadishError::Incomplete(_)) => Ok(None),
+            Err(e) => Err(e),
         }
     }
 
-    pub(crate) fn from_resp_value(value: RespValue<'a>) -> Result<Self, &'static str> {
+    pub(crate) fn from_resp_value(value: RespValue<'a>) -> Result<Self, RadishError> {
         match value {
             RespValue::Array(mut items) if !items.is_empty() => {
                 let first_item = items.remove(0);
@@ -74,7 +65,7 @@ impl<'a> RadishCommand<'a> {
                     RespValue::BulkString(s) => s,
                     RespValue::SimpleString(s) => s,
                     _ => {
-                        return Err("Invalid command");
+                        return Err(RadishError::InvalidCommand);
                     }
                 };
                 let cmd = CommandType::from(cmd);
@@ -90,7 +81,7 @@ impl<'a> RadishCommand<'a> {
 
                 Ok(RadishCommand { cmd, args })
             }
-            _ => Err("Invalid command"),
+            _ => Err(RadishError::InvalidCommand),
         }
     }
 

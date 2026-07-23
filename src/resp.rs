@@ -8,33 +8,35 @@ pub(crate) enum RespValue<'a> {
     Null,                     // $-1\r\n
 }
 
+use crate::error::RadishError;
+
 pub(crate) struct Resp;
 
 impl Resp {
     /// Reads a line terminated by \r\n
     /// Returns (line_without_crlf, remaining_buf)
-    fn read_line(buf: &[u8]) -> Result<(&[u8], &[u8]), &'static str> {
+    fn read_line(buf: &[u8]) -> Result<(&[u8], &[u8]), RadishError> {
         if buf.len() < 2 {
-            return Err("Invalid buffer length");
+            return Err(RadishError::Incomplete("Buffer length is less than 2 bytes".to_string()));
         }
         let pos = buf
             .windows(2)
             .position(|w| w == b"\r\n")
-            .ok_or("Line end not found")?;
+            .ok_or_else(|| RadishError::Incomplete("CRLF line end not found".to_string()))?;
 
         Ok((&buf[..pos], &buf[pos + 2..]))
     }
 
     /// Helper to safely parse ASCII numbers (like array lengths or integers) from &[u8]
-    pub(crate) fn parse_number<T: std::str::FromStr>(bytes: &[u8]) -> Result<T, &'static str> {
+    pub(crate) fn parse_number<T: std::str::FromStr>(bytes: &[u8]) -> Result<T, RadishError> {
         std::str::from_utf8(bytes)
-            .map_err(|_| "Protocol error: expected ASCII number")?
+            .map_err(|_| RadishError::Protocol("expected ASCII number".to_string()))?
             .parse::<T>()
-            .map_err(|_| "Protocol error: invalid number format")
+            .map_err(|_| RadishError::Protocol("invalid number format".to_string()))
     }
 
-    pub(crate) fn decode<'a>(buf: &'a [u8]) -> Result<(RespValue<'a>, &'a [u8]), &'static str> {
-        let first = buf.first().ok_or("decode called on empty buffer")?;
+    pub(crate) fn decode<'a>(buf: &'a [u8]) -> Result<(RespValue<'a>, &'a [u8]), RadishError> {
+        let first = buf.first().ok_or_else(|| RadishError::Incomplete("Decode called on empty buffer".to_string()))?;
         let buf = &buf[1..];
 
         match first {
@@ -74,26 +76,30 @@ impl Resp {
                 }
 
                 if len < 0 {
-                    return Err("Invalid bulk string length");
+                    return Err(RadishError::Protocol("Invalid bulk string length".to_string()));
                 }
 
                 let len = len as usize;
 
                 if remaining_after_len.len() < len + 2 {
-                    return Err("Insufficient buffer length for bulk string");
+                    return Err(RadishError::Incomplete(format!(
+                        "Insufficient buffer length for bulk string (expected {} bytes, got {})",
+                        len + 2,
+                        remaining_after_len.len()
+                    )));
                 }
 
                 let data = &remaining_after_len[..len];
 
                 if &remaining_after_len[len..len + 2] != b"\r\n" {
-                    return Err("Invalid bulk string format");
+                    return Err(RadishError::Protocol("Invalid bulk string format".to_string()));
                 }
 
                 let remaining = &remaining_after_len[len + 2..];
 
                 Ok((RespValue::BulkString(data), remaining))
             }
-            _ => Err("Invalid RESP value"),
+            _ => Err(RadishError::Protocol("Invalid RESP value".to_string())),
         }
     }
 

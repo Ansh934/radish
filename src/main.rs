@@ -1,4 +1,5 @@
 mod cmd;
+mod error;
 mod resp;
 mod response;
 mod server;
