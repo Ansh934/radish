@@ -6,7 +6,7 @@ edition = "2024"
 [dependencies]
 chrono = "0.4.45"
 thiserror = "2.0.19"
-tokio = { version = "1.52.3",  features = ["macros", "rt", "io-util", "net"] }
+tokio = { version = "1.52.3",  features = ["macros", "rt", "io-util", "net", "time"] }
 
 [profile.release]
 opt-level = 3
