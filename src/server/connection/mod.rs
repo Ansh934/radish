@@ -1,4 +1,5 @@
 mod connection_guard;
+mod read_buffer;
 
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -8,28 +9,22 @@ use crate::command::RadishCommand;
 use crate::handler::Dispatcher;
 use crate::storage::SharedStore;
 pub(crate) use connection_guard::ConnectionGuard;
+use read_buffer::ReadBuffer;
+
+const MAX_BUFFER_SIZE_ERROR_RESPONSE: &[u8] = b"-ERR Maximum buffer size exceeded\r\n";
+const CONNECTION_TIMEOUT_RESPONSE: &[u8] = b"-ERR Connection timed out\r\n";
 
 /// Owns all state for a single accepted TCP connection.
 ///
-/// Buffer layout (sliding window over a `Vec<u8>`):
-/// ```
-/// [ consumed | unparsed | free ]
-///  0        head       tail   len
-/// ```
-/// Advancing `head` consumes parsed bytes without shifting memory.
-/// When all bytes are consumed (`head == tail`), both pointers reset to 0,
-/// reclaiming the full buffer in O(1).
+/// Read buffering is delegated to [`ReadBuffer`], which encapsulates the
+/// sliding-window strategy (compact / grow / 1 MiB cap) behind a clean API.
 pub(crate) struct Connection {
     stream: TcpStream,
     store: SharedStore,
     /// Dropped when `Connection` is dropped, decrementing the active count.
     _guard: ConnectionGuard,
-    /// Read ring-buffer (sliding window).
-    buffer: Vec<u8>,
-    /// Start of unparsed data.
-    head: usize,
-    /// End of received data (next write position).
-    tail: usize,
+    /// Sliding-window read buffer for incoming RESP data.
+    read_buf: ReadBuffer,
     /// Accumulated outgoing responses; flushed in one syscall per loop tick.
     write_buf: Vec<u8>,
 }
@@ -40,9 +35,7 @@ impl Connection {
             stream,
             store,
             _guard: guard,
-            buffer: vec![0u8; 8192],
-            head: 0,
-            tail: 0,
+            read_buf: ReadBuffer::new(8192),
             write_buf: Vec::with_capacity(8192),
         }
     }
@@ -52,7 +45,8 @@ impl Connection {
     pub(crate) async fn run(mut self) {
         loop {
             // ── Buffer management ─────────────────────────────────────────
-            if !self.ensure_buffer_space().await {
+            if self.read_buf.ensure_space().is_err() {
+                let _ = self.stream.write_all(MAX_BUFFER_SIZE_ERROR_RESPONSE).await;
                 break;
             }
 
@@ -61,17 +55,16 @@ impl Connection {
                 Some(n) => n,
                 None => break,
             };
-            self.tail += n;
+            self.read_buf.fill(n);
 
             // ── Parse & dispatch ──────────────────────────────────────────
-            // Kept inline: `RadishCommand<'a>` borrows from `self.buffer`,
-            // so splitting this into a `&mut self` method would run into
-            // borrow-checker conflicts with `self.write_buf`.
-            while self.head < self.tail {
-                match RadishCommand::try_parse(&self.buffer[self.head..self.tail]) {
+            // `read_buf` and `write_buf` are disjoint fields, so borrowing
+            // `read_buf.unparsed()` no longer conflicts with `write_buf`.
+            while !self.read_buf.unparsed().is_empty() {
+                match RadishCommand::try_parse(self.read_buf.unparsed()) {
                     Ok(Some((cmd, consumed))) => {
-                        self.head += consumed;
                         Dispatcher::eval(cmd, &self.store, &mut self.write_buf);
+                        self.read_buf.consume(consumed);
                     }
                     Ok(None) => break, // incomplete — wait for the next read
                     Err(e) => {
@@ -87,61 +80,25 @@ impl Connection {
                 break;
             }
 
-            // Reset pointers when the buffer is fully consumed — O(1),
-            // no memory shifting required.
-            if self.head == self.tail {
-                self.head = 0;
-                self.tail = 0;
-            }
+            self.read_buf.reset_if_empty();
         }
     }
 
     // ── Private helpers ───────────────────────────────────────────────────
 
-    /// Ensures there is space in `buffer[tail..]` for the next read.
-    ///
-    /// Returns `false` if the buffer exceeded the 1 MB hard limit.
-    async fn ensure_buffer_space(&mut self) -> bool {
-        if self.tail < self.buffer.len() {
-            return true; // space already available
-        }
-
-        if self.head > 0 {
-            // Reclaim space by shifting unconsumed data to the front.
-            self.buffer.copy_within(self.head..self.tail, 0);
-            self.tail -= self.head;
-            self.head = 0;
-        } else {
-            // Buffer is full of a single giant unparsed command — grow it.
-            let new_len = self.buffer.len() * 2;
-            if new_len > 1024 * 1024 {
-                let _ = self
-                    .stream
-                    .write_all(b"-ERR Maximum buffer size exceeded\r\n")
-                    .await;
-                return false;
-            }
-            self.buffer.resize(new_len, 0);
-        }
-        true
-    }
-
-    /// Reads bytes from the stream into `buffer[tail..]` with a 30 s timeout.
+    /// Reads bytes from the stream into the read buffer with a 30 s timeout.
     ///
     /// Returns `Some(n)` on a successful read, `None` on EOF, timeout, or error.
     async fn read_bytes(&mut self) -> Option<usize> {
         let io_result = match tokio::time::timeout(
             Duration::from_secs(30),
-            self.stream.read(&mut self.buffer[self.tail..]),
+            self.stream.read(self.read_buf.spare()),
         )
         .await
         {
             Ok(result) => result,
             Err(_elapsed) => {
-                let _ = self
-                    .stream
-                    .write_all(b"-ERR Connection timed out\r\n")
-                    .await;
+                let _ = self.stream.write_all(CONNECTION_TIMEOUT_RESPONSE).await;
                 return None;
             }
         };

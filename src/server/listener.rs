@@ -4,10 +4,11 @@ use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 use tokio::task;
 
-use crate::storage::Store;
 use super::connection::{Connection, ConnectionGuard};
+use crate::storage::Store;
 
 const MAX_CONNECTIONS: usize = 10_000;
+const SERVER_FULL_RESPONSE: &[u8] = b"-ERR Server full\r\n";
 
 /// A bound TCP listener that owns the accept loop.
 ///
@@ -39,12 +40,12 @@ impl Listener {
                     // Reject immediately when at capacity.
                     if *self.active_connections.borrow() >= MAX_CONNECTIONS {
                         if let Ok((mut stream, _)) = self.tcp.accept().await {
-                            let _ = stream.write_all(b"-ERR Server full\r\n").await;
+                            let _ = stream.write_all(SERVER_FULL_RESPONSE).await;
                         }
                         continue;
                     }
 
-                    let (stream, addr) = match self.tcp.accept().await {
+                    let (stream, _) = match self.tcp.accept().await {
                         Ok(res) => res,
                         Err(e) => {
                             eprintln!("accept error: {}", e);
@@ -55,7 +56,6 @@ impl Listener {
                     // Disable Nagle's algorithm — eliminates the artificial 1 ms
                     // latency that small-write batching would otherwise introduce.
                     let _ = stream.set_nodelay(true);
-                    println!("accepted new connection from {}", addr);
 
                     let guard = ConnectionGuard::new(Rc::clone(&self.active_connections));
                     let conn = Connection::new(stream, Rc::clone(&self.store), guard);
