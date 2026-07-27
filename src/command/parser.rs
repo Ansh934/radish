@@ -1,5 +1,5 @@
 use crate::error::RadishError;
-use crate::protocol::{Resp, RespValue};
+use crate::protocol::RespValue;
 use super::types::CommandType;
 
 /// A fully-parsed client command, holding zero-copy references into the
@@ -20,7 +20,7 @@ impl<'a> RadishCommand<'a> {
             return Ok(None);
         }
 
-        match Resp::decode(buf) {
+        match RespValue::decode(buf) {
             Ok((resp_value, remaining)) => {
                 let consumed = buf.len() - remaining.len();
                 let cmd = Self::from_resp_value(resp_value)?;

@@ -1,5 +1,5 @@
 use crate::command::{CommandType, RadishCommand};
-use crate::protocol::{Resp, RespValue};
+use crate::protocol::{parse_number, RespValue};
 use crate::storage::SharedStore;
 
 /// Evaluates parsed commands against the store and encodes responses.
@@ -17,24 +17,24 @@ impl Dispatcher {
         match cmd.cmd_type() {
             CommandType::Ping => {
                 if cmd.args().is_empty() {
-                    Resp::encode_simple_string("PONG", buf);
+                    RespValue::write_simple_string("PONG", buf);
                 } else {
-                    Resp::encode_bulk_string_from_slice(cmd.args()[0], buf);
+                    RespValue::write_bulk_string(cmd.args()[0], buf);
                 }
             }
 
             CommandType::Echo => {
                 if cmd.args().is_empty() {
-                    Resp::encode_error("ECHO command requires an argument", buf);
+                    RespValue::write_error("ECHO command requires an argument", buf);
                 } else {
-                    Resp::encode_bulk_string_from_slice(cmd.args()[0], buf);
+                    RespValue::write_bulk_string(cmd.args()[0], buf);
                 }
             }
 
             CommandType::Set => {
                 let args = cmd.args();
                 if args.len() < 2 {
-                    Resp::encode_error("SET command requires a key and a value", buf);
+                    RespValue::write_error("SET command requires a key and a value", buf);
                     return;
                 }
 
@@ -51,17 +51,17 @@ impl Dispatcher {
                         i += 1;
 
                         if i >= args.len() {
-                            Resp::encode_error(
+                            RespValue::write_error(
                                 "SET command with EX/PX requires an expiry time",
                                 buf,
                             );
                             return;
                         }
 
-                        let val = match Resp::parse_number::<i64>(args[i]) {
+                        let val = match parse_number::<i64>(args[i]) {
                             Ok(v) => v,
                             Err(_) => {
-                                Resp::encode_error(
+                                RespValue::write_error(
                                     "ERR value is not an integer or out of range",
                                     buf,
                                 );
@@ -75,7 +75,7 @@ impl Dispatcher {
                             Some(val)
                         };
                     } else {
-                        Resp::encode_error(
+                        RespValue::write_error(
                             "Unknown option for SET command. Only EX and PX are supported.",
                             buf,
                         );
@@ -85,32 +85,32 @@ impl Dispatcher {
                 }
 
                 store.borrow_mut().set(key, value, expiry_ms);
-                Resp::encode_simple_string("OK", buf);
+                RespValue::write_simple_string("OK", buf);
             }
 
             CommandType::Get => match cmd.args().first() {
                 Some(key) => {
                     let store_ref = store.borrow();
                     if let Some(value) = store_ref.get(key) {
-                        Resp::encode(&RespValue::BulkString(value), buf);
+                        RespValue::BulkString(value).encode_to(buf);
                     } else {
-                        Resp::encode_null(buf);
+                        RespValue::write_null(buf);
                     }
                 }
-                None => Resp::encode_error("GET command requires a key", buf),
+                None => RespValue::write_error("GET command requires a key", buf),
             },
 
             CommandType::Ttl => match cmd.args().first() {
                 Some(key) => {
                     let store_ref = store.borrow();
                     let ttl = store_ref.ttl(key);
-                    Resp::encode(&RespValue::Integer(ttl), buf);
+                    RespValue::Integer(ttl).encode_to(buf);
                 }
-                None => Resp::encode_error("TTL command requires a key", buf),
+                None => RespValue::write_error("TTL command requires a key", buf),
             },
 
             CommandType::Unknown(name) => {
-                Resp::encode_error(
+                RespValue::write_error(
                     &format!("unknown command: {}", String::from_utf8_lossy(name)),
                     buf,
                 );
