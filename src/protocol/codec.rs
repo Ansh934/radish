@@ -1,5 +1,5 @@
-use crate::error::RadishError;
 use super::types::RespValue;
+use crate::error::RadishError;
 
 /// Zero-allocation RESP codec.
 ///
@@ -7,6 +7,15 @@ use super::types::RespValue;
 /// allocations occur during parsing.  Encode methods append to a caller-
 /// supplied `Vec<u8>` write buffer, avoiding allocation per call.
 pub(crate) struct Resp;
+
+const INSUFFICIENT_BUFFER_LENGTH_MESSAGE: &str = "Buffer length is less than 2 bytes";
+const CRLF_NOT_FOUND_MESSAGE: &str = "CRLF line end not found";
+const INVALID_NUMBER_FORMAT_MESSAGE: &str = "Invalid number format";
+const EXPECTED_ASCII_NUMBER_MESSAGE: &str = "Expected ASCII number";
+const DECODE_CALLED_ON_EMPTY_BUFFER_MESSAGE: &str = "Decode called on empty buffer";
+const INVALID_BULK_STRING_LENGTH_MESSAGE: &str = "Invalid bulk string length";
+const INVALID_BULK_STRING_FORMAT_MESSAGE: &str = "Invalid bulk string format";
+const INVALID_RESP_VALUE_MESSAGE: &str = "Invalid RESP value";
 
 impl Resp {
     // ── Decoding helpers ────────────────────────────────────────────────────
@@ -17,13 +26,13 @@ impl Resp {
     fn read_line(buf: &[u8]) -> Result<(&[u8], &[u8]), RadishError> {
         if buf.len() < 2 {
             return Err(RadishError::Incomplete(
-                "Buffer length is less than 2 bytes".to_string(),
+                INSUFFICIENT_BUFFER_LENGTH_MESSAGE.to_string(),
             ));
         }
         let pos = buf
             .windows(2)
             .position(|w| w == b"\r\n")
-            .ok_or_else(|| RadishError::Incomplete("CRLF line end not found".to_string()))?;
+            .ok_or_else(|| RadishError::Incomplete(CRLF_NOT_FOUND_MESSAGE.to_string()))?;
 
         Ok((&buf[..pos], &buf[pos + 2..]))
     }
@@ -31,9 +40,9 @@ impl Resp {
     /// Parses an ASCII decimal number from a byte slice.
     pub(crate) fn parse_number<T: std::str::FromStr>(bytes: &[u8]) -> Result<T, RadishError> {
         std::str::from_utf8(bytes)
-            .map_err(|_| RadishError::Protocol("expected ASCII number".to_string()))?
+            .map_err(|_| RadishError::Protocol(EXPECTED_ASCII_NUMBER_MESSAGE.to_string()))?
             .parse::<T>()
-            .map_err(|_| RadishError::Protocol("invalid number format".to_string()))
+            .map_err(|_| RadishError::Protocol(INVALID_NUMBER_FORMAT_MESSAGE.to_string()))
     }
 
     /// Decodes one RESP value from `buf`.
@@ -43,7 +52,7 @@ impl Resp {
     pub(crate) fn decode<'a>(buf: &'a [u8]) -> Result<(RespValue<'a>, &'a [u8]), RadishError> {
         let first = buf
             .first()
-            .ok_or_else(|| RadishError::Incomplete("Decode called on empty buffer".to_string()))?;
+            .ok_or_else(|| RadishError::Incomplete(DECODE_CALLED_ON_EMPTY_BUFFER_MESSAGE.to_string()))?;
         let buf = &buf[1..];
 
         match first {
@@ -82,7 +91,7 @@ impl Resp {
                 }
                 if len < 0 {
                     return Err(RadishError::Protocol(
-                        "Invalid bulk string length".to_string(),
+                        INVALID_BULK_STRING_LENGTH_MESSAGE.to_string(),
                     ));
                 }
 
@@ -100,13 +109,15 @@ impl Resp {
 
                 if &remaining_after_len[len..len + 2] != b"\r\n" {
                     return Err(RadishError::Protocol(
-                        "Invalid bulk string format".to_string(),
+                        INVALID_BULK_STRING_FORMAT_MESSAGE.to_string(),
                     ));
                 }
 
                 Ok((RespValue::BulkString(data), &remaining_after_len[len + 2..]))
             }
-            _ => Err(RadishError::Protocol("Invalid RESP value".to_string())),
+            _ => Err(RadishError::Protocol(
+                INVALID_RESP_VALUE_MESSAGE.to_string(),
+            )),
         }
     }
 
