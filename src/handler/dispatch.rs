@@ -90,11 +90,14 @@ impl Dispatcher {
 
             CommandType::Get => match cmd.args().first() {
                 Some(key) => {
-                    let store_ref = store.borrow();
-                    if let Some(value) = store_ref.get(key) {
-                        RespValue::BulkString(value).encode_to(buf);
-                    } else {
-                        RespValue::write_null(buf);
+                    let mut store_ref = store.borrow_mut();
+                    match store_ref.get(key) {
+                        Some(value) => {
+                            RespValue::BulkString(value).encode_to(buf);
+                        }
+                        None => {
+                            RespValue::write_null(buf);
+                        }
                     }
                 }
                 None => RespValue::write_error("GET command requires a key", buf),
@@ -102,11 +105,49 @@ impl Dispatcher {
 
             CommandType::Ttl => match cmd.args().first() {
                 Some(key) => {
-                    let store_ref = store.borrow();
+                    let mut store_ref = store.borrow_mut();
                     let ttl = store_ref.ttl(key);
                     RespValue::Integer(ttl).encode_to(buf);
                 }
                 None => RespValue::write_error("TTL command requires a key", buf),
+            },
+            
+            CommandType::Del => {
+                let args = cmd.args();
+                if args.is_empty() {
+                    RespValue::write_error("DEL command requires a key", buf);
+                    return;
+                }
+                let mut deleted_count = 0;
+                args.iter().for_each(|key| {
+                    if store.borrow_mut().del(key) {
+                        deleted_count += 1;
+                    }
+                });
+                RespValue::Integer(deleted_count).encode_to(buf);
+            }
+            CommandType::Expire => {
+                let args = cmd.args();
+                if args.len() < 2 {
+                    RespValue::write_error("EXPIRE command requires a key and a time", buf);
+                    return;
+                }
+                let key = args[0];
+                let expiry_time = match parse_number::<i64>(args[1]) {
+                    Ok(v) => v,
+                    Err(_) => {
+                        RespValue::write_error(
+                            "ERR value is not an integer or out of range",
+                            buf,
+                        );
+                        return;
+                    }
+                };
+                if store.borrow_mut().expire(key, expiry_time) {
+                    RespValue::Integer(1).encode_to(buf); // send 1 if the key exists and was updated
+                } else {
+                    RespValue::Integer(0).encode_to(buf); // send 0 if the key does not exist
+                }
             },
 
             CommandType::Unknown(name) => {

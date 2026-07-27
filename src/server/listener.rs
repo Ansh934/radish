@@ -34,6 +34,24 @@ impl Listener {
     /// Runs the accept loop, blocking until the process exits.
     pub(crate) async fn run(self) -> Result<(), Box<dyn std::error::Error>> {
         let local = task::LocalSet::new();
+        let store_for_cleanup = Rc::clone(&self.store);
+        local.spawn_local(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
+            loop {
+                interval.tick().await;
+                loop {
+                    let frac = store_for_cleanup.borrow_mut().cleanup_expired_entries(20);
+                    if frac < 0.25 {
+                        break;
+                    }
+                }
+                println!(
+                    "Ran cleanup. Store size: {}",
+                    store_for_cleanup.borrow().len()
+                );
+            }
+        });
+
         local
             .run_until(async move {
                 loop {
@@ -45,6 +63,7 @@ impl Listener {
                         continue;
                     }
 
+                    // Accept a new connection.
                     let (stream, _) = match self.tcp.accept().await {
                         Ok(res) => res,
                         Err(e) => {
@@ -57,6 +76,7 @@ impl Listener {
                     // latency that small-write batching would otherwise introduce.
                     let _ = stream.set_nodelay(true);
 
+                    // Spawn a new task to handle the connection.
                     let guard = ConnectionGuard::new(Rc::clone(&self.active_connections));
                     let conn = Connection::new(stream, Rc::clone(&self.store), guard);
                     task::spawn_local(conn.run());

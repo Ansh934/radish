@@ -9,6 +9,8 @@ pub(crate) enum CommandType<'a> {
     Set,
     Get,
     Ttl,
+    Del,
+    Expire,
     /// An unrecognised command name (zero-copy borrow of the raw bytes).
     Unknown(&'a [u8]),
 }
@@ -25,6 +27,10 @@ impl<'a> From<&'a [u8]> for CommandType<'a> {
             CommandType::Get
         } else if cmd.eq_ignore_ascii_case(b"TTL") {
             CommandType::Ttl
+        } else if cmd.eq_ignore_ascii_case(b"DEL") {
+            CommandType::Del
+        } else if cmd.eq_ignore_ascii_case(b"EXPIRE") {
+            CommandType::Expire
         } else {
             CommandType::Unknown(cmd)
         }

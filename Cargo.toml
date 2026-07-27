@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 chrono = "0.4.45"
+rand = "0.10.2"
 thiserror = "2.0.19"
 tokio = { version = "1.52.3",  features = ["macros", "rt", "io-util", "net", "time"] }
 
