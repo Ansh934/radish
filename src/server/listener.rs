@@ -5,8 +5,7 @@ use tokio::net::TcpListener;
 use tokio::task;
 
 use crate::storage::Store;
-use super::connection::Connection;
-use super::connection_guard::ConnectionGuard;
+use super::connection::{Connection, ConnectionGuard};
 
 const MAX_CONNECTIONS: usize = 10_000;
 

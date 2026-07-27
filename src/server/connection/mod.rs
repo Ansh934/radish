@@ -1,3 +1,5 @@
+mod connection_guard;
+
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -5,7 +7,7 @@ use tokio::net::TcpStream;
 use crate::command::RadishCommand;
 use crate::handler::Dispatcher;
 use crate::storage::SharedStore;
-use super::connection_guard::ConnectionGuard;
+pub(crate) use connection_guard::ConnectionGuard;
 
 /// Owns all state for a single accepted TCP connection.
 ///
@@ -145,9 +147,9 @@ impl Connection {
         };
 
         match io_result {
-            Ok(0) => None,   // clean EOF — client closed the connection
+            Ok(0) => None, // clean EOF — client closed the connection
             Ok(n) => Some(n),
-            Err(_) => None,  // I/O error
+            Err(_) => None, // I/O error
         }
     }
 
