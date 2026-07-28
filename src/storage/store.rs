@@ -20,16 +20,26 @@ pub(crate) struct StoreValue {
 /// The in-memory key-value store.
 pub(crate) struct Store {
     data: HashMap<Vec<u8>, StoreValue>,
+    max_capacity: Option<usize>,
 }
 
 impl Store {
     /// Creates a new, empty `Store` wrapped in a `SharedStore`.
+    #[allow(dead_code)]
     pub(crate) fn new() -> SharedStore {
         Rc::new(RefCell::new(Store {
             data: HashMap::new(),
+            max_capacity: None,
         }))
     }
-    
+
+    pub(crate) fn with_capacity(max_capacity: usize) -> SharedStore {
+        Rc::new(RefCell::new(Store {
+            data: HashMap::new(),
+            max_capacity: Some(max_capacity),
+        }))
+    }
+
     pub(crate) fn len(&self) -> usize {
         self.data.len()
     }
@@ -37,6 +47,7 @@ impl Store {
     /// Inserts or updates `key` with `value`, optionally expiring after
     /// `expiry_ms` milliseconds from now.
     pub(crate) fn set(&mut self, key: &[u8], value: &[u8], expiry_ms: Option<i64>) {
+        self.evict_if_needed();
         let expiry = expiry_ms.map(|ms| Utc::now() + Duration::milliseconds(ms));
         self.data.insert(
             key.to_vec(),
@@ -125,5 +136,19 @@ impl Store {
             self.data.remove(&key);
         }
         frac
+    }
+
+    fn evict_if_needed(&mut self) {
+        if let Some(max_capacity) = self.max_capacity {
+            if self.data.len() >= max_capacity {
+                self.data
+                    .iter()
+                    .choose(&mut rand::rng())
+                    .map(|(key, _)| key.clone())
+                    .map(|key_to_evict| {
+                        self.data.remove(&key_to_evict);
+                    });
+            }
+        }
     }
 }

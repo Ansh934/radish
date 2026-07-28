@@ -26,7 +26,7 @@ impl Listener {
         println!("Starting server on {}", addr);
         Ok(Self {
             tcp: TcpListener::bind(addr).await?,
-            store: Store::new(),
+            store: Store::with_capacity(10), 
             active_connections: Rc::new(RefCell::new(0)),
         })
     }
