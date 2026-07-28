@@ -116,6 +116,7 @@ impl Connection {
         if self.write_buf.is_empty() {
             return Ok(());
         }
+        // println!("Flushing {} bytes to client",String::from_utf8_lossy(&self.write_buf));
         self.stream
             .write_all(&self.write_buf)
             .await

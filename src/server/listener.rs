@@ -36,12 +36,16 @@ impl Listener {
         let local = task::LocalSet::new();
         let store_for_cleanup = Rc::clone(&self.store);
         local.spawn_local(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
+            // Time Period for cleanup of expired entries in the store
+            let duration_in_secs: u64 = 10;
+            let max_expired_entries_allowed: f64 = 0.25;
+            let mut interval =
+                tokio::time::interval(std::time::Duration::from_secs(duration_in_secs));
             loop {
                 interval.tick().await;
                 loop {
                     let frac = store_for_cleanup.borrow_mut().cleanup_expired_entries(20);
-                    if frac < 0.25 {
+                    if frac < max_expired_entries_allowed {
                         break;
                     }
                 }

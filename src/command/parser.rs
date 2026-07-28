@@ -20,6 +20,8 @@ impl<'a> RadishCommand<'a> {
             return Ok(None);
         }
 
+        // println!("try_parse: buf = {:?}", String::from_utf8_lossy(buf));
+
         match RespValue::decode(buf) {
             Ok((resp_value, remaining)) => {
                 let consumed = buf.len() - remaining.len();
