@@ -1,21 +1,17 @@
-use chrono::{DateTime, Duration, Utc};
+use chrono::{Duration, Utc};
 use rand::seq::IteratorRandom;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::fs::File;
 use std::rc::Rc;
+
+use super::store_value::StoreValue;
 
 /// A shared, single-threaded reference to the in-memory store.
 ///
 /// Uses `Rc<RefCell<Store>>` because the server runs on a `tokio::task::LocalSet`
 /// (single-threaded) and avoids the overhead of `Arc<Mutex<…>>`.
 pub(crate) type SharedStore = Rc<RefCell<Store>>;
-
-/// A single stored value with an optional expiry timestamp.
-
-pub(crate) struct StoreValue {
-    value: Vec<u8>,
-    expiry: Option<DateTime<Utc>>,
-}
 
 /// The in-memory key-value store.
 pub(crate) struct Store {
@@ -44,58 +40,51 @@ impl Store {
         self.data.len()
     }
 
-    /// Inserts or updates `key` with `value`, optionally expiring after
-    /// `expiry_ms` milliseconds from now.
+    // ── String commands ──────────────────────────────────────────────────
+
+    /// Inserts or updates `key` with a string `value`, optionally expiring
+    /// after `expiry_ms` milliseconds from now.
     pub(crate) fn set(&mut self, key: &[u8], value: &[u8], expiry_ms: Option<i64>) {
         self.evict_if_needed();
         let expiry = expiry_ms.map(|ms| Utc::now() + Duration::milliseconds(ms));
         self.data.insert(
             key.to_vec(),
-            StoreValue {
-                value: value.to_vec(),
-                expiry,
-            },
+            StoreValue::new_string(value.to_vec(), expiry),
         );
     }
 
-    /// Returns `Some(&[u8])` for a live key, or `None` if the key is missing
-    /// or has expired.
-    pub(crate) fn get(&mut self, key: &[u8]) -> Option<&[u8]> {
-        let is_expired = self.data.get(key).map_or(false, |sv| {
-            sv.expiry.map_or(false, |expiry| expiry <= Utc::now())
-        });
-        if is_expired {
-            self.data.remove(key);
-            None
-        } else {
-            self.data.get(key).map(|sv| sv.value.as_slice())
+    /// Returns the string value for `key`, lazily removing expired keys.
+    ///
+    /// - `Ok(Some(bytes))` — live string value.
+    /// - `Ok(None)` — key missing or expired.
+    /// - `Err(WrongType)` — key exists but is not a string.
+    pub(crate) fn get(&mut self, key: &[u8]) -> Result<Option<&[u8]>, crate::error::RadishError> {
+        if self.remove_if_expired(key) {
+            return Ok(None);
+        }
+        match self.data.get(key) {
+            Some(sv) => Ok(Some(sv.as_string()?)),
+            None => Ok(None),
         }
     }
+
+    // ── Key-agnostic commands ────────────────────────────────────────────
 
     /// Returns the time-to-live of `key` in seconds:
     /// - `≥ 0` — remaining TTL
     /// - `-1` — key exists but has no expiry
     /// - `-2` — key does not exist (or has already expired)
     pub(crate) fn ttl(&mut self, key: &[u8]) -> i64 {
-        let mut is_expired = false;
-        let response = match self.data.get(key) {
-            Some(sv) => match sv.expiry {
-                Some(expiry) if expiry > Utc::now() => {
-                    expiry.signed_duration_since(Utc::now()).num_seconds()
-                }
-                Some(_) => {
-                    is_expired = true;
-                    -2
-                } // expired
-                None => -1, // no expiry set
-            },
-            None => -2, // key does not exist
-        };
-
-        if is_expired {
-            self.data.remove(key);
+        if self.remove_if_expired(key) {
+            return -2;
         }
-        response
+        match self.data.get(key) {
+            Some(sv) => match sv.expiry() {
+                Some(expiry) => expiry.signed_duration_since(Utc::now()).num_seconds(),
+                None => -1,
+            },
+            None => -2,
+        }
     }
 
     pub(crate) fn del(&mut self, key: &[u8]) -> bool {
@@ -104,14 +93,17 @@ impl Store {
 
     pub(crate) fn expire(&mut self, key: &[u8], expiry_ms: i64) -> bool {
         if let Some(sv) = self.data.get_mut(key) {
-            sv.expiry = Some(Utc::now() + Duration::milliseconds(expiry_ms));
+            sv.set_expiry(Utc::now() + Duration::milliseconds(expiry_ms));
             true
         } else {
             false
         }
     }
 
-    // check n random entries for expiry and remove them if expired
+    // ── Background maintenance ───────────────────────────────────────────
+
+    /// Samples `n` random entries and removes any that have expired.
+    /// Returns the fraction of sampled entries that were expired.
     pub(crate) fn cleanup_expired_entries(&mut self, n: usize) -> f64 {
         let mut rng = rand::rng();
         let now = Utc::now();
@@ -122,9 +114,9 @@ impl Store {
             .sample(&mut rng, n)
             .into_iter()
             .filter_map(|(key, sv)| {
-                if let Some(expiry) = sv.expiry {
+                if let Some(expiry) = sv.expiry() {
                     if expiry <= now {
-                        return Some(key.clone()); // Only clone if we are deleting it!
+                        return Some(key.clone());
                     }
                 }
                 None
@@ -136,6 +128,41 @@ impl Store {
             self.data.remove(&key);
         }
         frac
+    }
+
+    // ── AOF persistence ──────────────────────────────────────────────────
+
+    fn dump_aof(&self) -> Result<(), std::io::Error> {
+        use std::fs::OpenOptions;
+        let aof_file_path = "appendonly.aof";
+        let mut file: File = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(aof_file_path)?;
+        let mut writer = std::io::BufWriter::new(&mut file);
+
+        for (key, store_value) in &self.data {
+            if store_value.is_expired() {
+                continue;
+            }
+            store_value.dump_aof_command(key, &mut writer)?;
+        }
+
+        Ok(())
+    }
+
+    // ── Private helpers ──────────────────────────────────────────────────
+
+    /// Removes `key` if it has expired. Returns `true` if a removal occurred.
+    fn remove_if_expired(&mut self, key: &[u8]) -> bool {
+        let expired = self
+            .data
+            .get(key)
+            .map_or(false, |sv| sv.is_expired());
+        if expired {
+            self.data.remove(key);
+        }
+        expired
     }
 
     fn evict_if_needed(&mut self) {
