@@ -8,6 +8,9 @@ pub(crate) enum RadishError {
     #[error("Protocol error: {0}")]
     Protocol(&'static str),
 
+    #[error("WRONGTYPE Operation against a key holding the wrong kind of value")]
+    WrongType,
+
     #[error("Invalid command")]
     InvalidCommand,
 }

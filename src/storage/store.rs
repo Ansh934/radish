@@ -132,11 +132,11 @@ impl Store {
 
     // ── AOF persistence ──────────────────────────────────────────────────
 
-    fn dump_aof(&self) -> Result<(), std::io::Error> {
+    pub(crate) fn dump_aof(&self) -> Result<(), std::io::Error> {
         use std::fs::OpenOptions;
         let aof_file_path = "appendonly.aof";
         let mut file: File = OpenOptions::new()
-            .create(true)
+            .create_new(true)
             .append(true)
             .open(aof_file_path)?;
         let mut writer = std::io::BufWriter::new(&mut file);

@@ -1,3 +1,5 @@
+use std::io;
+
 use super::types::RespValue;
 
 // ── Private integer serializers ──────────────────────────────────────────
@@ -93,6 +95,48 @@ impl RespValue<'_> {
                 }
             }
         }
+    }
+
+    /// Encodes this RESP value into an `io::Write` trait object (like a File).
+    /// This is slightly slower than `encode_to` because of `to_string()` allocations
+    /// and I/O error checking, but it is ideal for cold-path operations like AOF dumping.
+    pub(crate) fn encode_to_writer(&self, writer: &mut impl io::Write) -> io::Result<()> {
+        match self {
+            Self::SimpleString(s) => {
+                writer.write_all(b"+")?;
+                writer.write_all(s)?;
+                writer.write_all(b"\r\n")?;
+            }
+            Self::BulkString(s) => {
+                writer.write_all(b"$")?;
+                writer.write_all(s.len().to_string().as_bytes())?;
+                writer.write_all(b"\r\n")?;
+                writer.write_all(s)?;
+                writer.write_all(b"\r\n")?;
+            }
+            Self::Integer(i) => {
+                writer.write_all(b":")?;
+                writer.write_all(i.to_string().as_bytes())?;
+                writer.write_all(b"\r\n")?;
+            }
+            Self::Error(e) => {
+                writer.write_all(b"-")?;
+                writer.write_all(e)?;
+                writer.write_all(b"\r\n")?;
+            }
+            Self::Null => {
+                writer.write_all(b"$-1\r\n")?;
+            }
+            Self::Array(arr) => {
+                writer.write_all(b"*")?;
+                writer.write_all(arr.len().to_string().as_bytes())?;
+                writer.write_all(b"\r\n")?;
+                for item in arr {
+                    item.encode_to_writer(writer)?;
+                }
+            }
+        }
+        Ok(())
     }
 
     // ── Convenience writers (encode directly without constructing a value) ──

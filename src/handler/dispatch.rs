@@ -92,11 +92,14 @@ impl Dispatcher {
                 Some(key) => {
                     let mut store_ref = store.borrow_mut();
                     match store_ref.get(key) {
-                        Some(value) => {
+                        Ok(Some(value)) => {
                             RespValue::BulkString(value).encode_to(buf);
                         }
-                        None => {
+                        Ok(None) => {
                             RespValue::write_null(buf);
+                        }
+                        Err(e) => {
+                            RespValue::write_error(&e.to_string(), buf);
                         }
                     }
                 }
@@ -149,7 +152,12 @@ impl Dispatcher {
                     RespValue::Integer(0).encode_to(buf); // send 0 if the key does not exist
                 }
             },
-
+            CommandType::BgRewriteAOF => {
+                match store.borrow_mut().dump_aof() {
+                    Ok(()) => RespValue::write_simple_string("OK", buf),
+                    Err(e) => RespValue::write_error(&e.to_string(), buf),
+                }
+            },
             CommandType::Unknown(name) => {
                 RespValue::write_error(
                     &format!("unknown command: {}", String::from_utf8_lossy(name)),

@@ -11,6 +11,7 @@ pub(crate) enum CommandType<'a> {
     Ttl,
     Del,
     Expire,
+    BgRewriteAOF,
     /// An unrecognised command name (zero-copy borrow of the raw bytes).
     Unknown(&'a [u8]),
 }
@@ -31,6 +32,8 @@ impl<'a> From<&'a [u8]> for CommandType<'a> {
             CommandType::Del
         } else if cmd.eq_ignore_ascii_case(b"EXPIRE") {
             CommandType::Expire
+        } else if cmd.eq_ignore_ascii_case(b"BGREWRITEAOF") {
+            CommandType::BgRewriteAOF
         } else {
             CommandType::Unknown(cmd)
         }

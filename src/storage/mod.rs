@@ -5,5 +5,6 @@
 //! eviction, or multi-threaded access without touching any other layer.
 
 mod store;
+mod store_value;
 
 pub(crate) use store::{SharedStore, Store};
